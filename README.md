@@ -1,4 +1,4 @@
-# Convolution, Transformer, and Operator (CTO)
+# Masked Attention Transformer (CAT-Net)
 This is the official code for our MICCAI 2023 paper:
 
 > [Few Shot Medical Image Segmentation with Cross Attention Transformer](https://arxiv.org/abs/2303.13867) <br>
