@@ -2,7 +2,7 @@
 This is the official code for our MICCAI 2023 paper:
 
 > [Few Shot Medical Image Segmentation with Cross Attention Transformer](https://arxiv.org/abs/2303.13867) <br>
-> Yi Lin*, Dong Zhang*, Xiao Fang, Yufan Chen, Kwang-Ting Cheng, Hao Chen
+> Yi Lin*, Yufan Chen*, Kwang-Ting Cheng, Hao Chen
 
 ## Highlights
 <p align="justify">
@@ -16,7 +16,7 @@ git clone https://github.com/hust-linyi/CAT-Net
 
 ### Requirement
 ```
-pip install -r MedISeg/requirements.txt
+pip install -r 
 ```
 
 ### Data preparation
