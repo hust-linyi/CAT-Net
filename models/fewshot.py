@@ -8,13 +8,12 @@ from .encoder import Res101Encoder
 
 class FewShotSeg(nn.Module):
 
-    def __init__(self, use_coco_init=True):
+    def __init__(self, pretrained_weights="resnet101",):
         super().__init__()
 
         # Encoder
-        #self.encoder = TVDeeplabRes101Encoder(use_coco_init)
         self.encoder = Res101Encoder(replace_stride_with_dilation=[True, True, False],
-                                     pretrained_weights=pretrained_weights)  # or "resnet101"
+                                     pretrained_weights= pretrained_weights)  # or "resnet101"
         self.device = torch.device('cuda')
         self.t = Parameter(torch.Tensor([-10.0]))
         self.scaler = 20.0
@@ -25,6 +24,7 @@ class FewShotSeg(nn.Module):
         # Additional self attention and cross attention
         self.self_attention = SelfAttention(self.encoder.output_dim)
         self.cross_attention = CrossAttention(self.encoder.output_dim)
+        self.high_avg_pool = nn.AdaptiveAvgPool1d(self.encoder.output_dim)
 
     def generate_prior(self, query_feat, supp_feat, s_y, fts_size):
         bsize, _, sp_sz, _ = query_feat.size()[:]
@@ -114,15 +114,7 @@ class FewShotSeg(nn.Module):
         # Concatenate prior and query features
         #qry_fts = torch.cat([qry_fts_reshaped, corr_query_mask], dim=2)  # N x B x (C + 1) x H' x W'
 
-        # Expand corr_query_mask from N x B x 1 x H' x W' to N x B x C x H' x W'
-        corr_query_mask_expanded = corr_query_mask.expand(-1, -1, qry_fts.shape[2], -1, -1)
-
-        # Perform element-wise multiplication
-        qry_fts_masked = qry_fts * corr_query_mask_expanded
-
-        # Convolution to reduce the channel dimension
-        conv = nn.Conv2d(qry_fts.shape[2], qry_fts.shape[2], kernel_size=1)  # 1x1 convolution
-        qry_fts = conv(qry_fts_masked.view(-1, qry_fts.shape[2], *fts_size)).view(n_queries, batch_size_q, -1,
+        qry_fts = self.conv_fusion(qry_fts.view(-1, qry_fts.shape[2], *fts_size)).view(n_queries, batch_size_q, -1,
                                                                                   *fts_size)
 
         supp_fts_reshaped = supp_fts.view(-1, *supp_fts.shape[3:])
