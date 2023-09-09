@@ -4,7 +4,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 from torchvision_backbones import TVDeeplabRes101Encoder
-from .encoder import Res101Encoder
 
 
 class FewShotSeg(nn.Module):
@@ -14,8 +13,6 @@ class FewShotSeg(nn.Module):
 
         # Encoder
         self.encoder = TVDeeplabRes101Encoder(use_coco_init)
-        #self.encoder = Res101Encoder(replace_stride_with_dilation=[True, True, False],
-                                     #pretrained_weights=pretrained_weights)
         self.device = torch.device('cuda')
         self.t = Parameter(torch.Tensor([-10.0]))
         self.scaler = 20.0
