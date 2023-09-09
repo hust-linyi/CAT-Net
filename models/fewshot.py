@@ -3,28 +3,27 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
+from torchvision_backbones import TVDeeplabRes101Encoder
 from .encoder import Res101Encoder
 
 
 class FewShotSeg(nn.Module):
 
-    def __init__(self, pretrained_weights="resnet101",):
+    def __init__(self, use_coco_init=True,):
         super().__init__()
 
         # Encoder
-        self.encoder = Res101Encoder(replace_stride_with_dilation=[True, True, False],
-                                     pretrained_weights= pretrained_weights)  # or "resnet101"
+        self.encoder = TVDeeplabRes101Encoder(use_coco_init)
+        #self.encoder = Res101Encoder(replace_stride_with_dilation=[True, True, False],
+                                     #pretrained_weights=pretrained_weights)
         self.device = torch.device('cuda')
         self.t = Parameter(torch.Tensor([-10.0]))
         self.scaler = 20.0
         self.criterion = nn.NLLLoss()
-        # Additional convolution for prior and query feature fusion
-        self.conv_fusion = nn.Conv2d(self.encoder.output_dim + 1, self.encoder.output_dim, kernel_size=1)
-        self.shot = 1
-        # Additional self attention and cross attention
-        self.self_attention = SelfAttention(self.encoder.output_dim)
-        self.cross_attention = CrossAttention(self.encoder.output_dim)
-        self.high_avg_pool = nn.AdaptiveAvgPool1d(self.encoder.output_dim)
+        self.self_attention = SelfAttention(256)
+        self.cross_attention = CrossAttention(256)
+        self.high_avg_pool = nn.AdaptiveAvgPool1d(256)
+        self.conv_fusion = nn.Conv2d(256 + 1, 256, kernel_size=1)
 
     def generate_prior(self, query_feat, supp_feat, s_y, fts_size):
         bsize, _, sp_sz, _ = query_feat.size()[:]
@@ -56,7 +55,7 @@ class FewShotSeg(nn.Module):
         return corr_query_mask
 
 
-    def forward(self, supp_imgs, fore_mask, qry_imgs, train=False, t_loss_scaler=1):
+    def forward(self, supp_imgs, fore_mask, qry_imgs, train=False, t_loss_scaler=1,n_iters=0):
         """
         Args:
             supp_imgs: support images
@@ -71,6 +70,11 @@ class FewShotSeg(nn.Module):
 
         n_ways = len(supp_imgs)
         self.n_shots = len(supp_imgs[0])
+        self.n_ways = len(supp_imgs)
+        self.n_shots = len(supp_imgs[0])
+        self.n_queries = len(qry_imgs)
+        assert self.n_ways == 1  # for now only one-way, because not every shot has multiple sub-images
+        assert self.n_queries == 1
         n_queries = len(qry_imgs)
         batch_size_q = qry_imgs[0].shape[0]
         batch_size = supp_imgs[0][0].shape[0]
@@ -81,12 +85,13 @@ class FewShotSeg(nn.Module):
                                 + [torch.cat(qry_imgs, dim=0), ], dim=0)
         img_fts = self.encoder(imgs_concat, low_level=False)
 
-        fts_size = img_fts.shape[-2:]
 
+        fts_size = img_fts.shape[-2:]
         supp_fts = img_fts[:n_ways * self.n_shots * batch_size].view(
             n_ways, self.n_shots, batch_size, -1, *fts_size)  # Wa x Sh x B x C x H' x W'
         qry_fts = img_fts[n_ways * self.n_shots * batch_size:].view(
             n_queries, batch_size_q, -1, *fts_size)  # N x B x C x H' x W'
+
         # Reshape for self_attention
         supp_fts_reshaped = supp_fts.view(-1, *supp_fts.shape[-3:])  # (Wa*Sh*B) x C x H' x W'
         qry_fts_reshaped = qry_fts.view(-1, *qry_fts.shape[-3:])  # (N*B) x C x H' x W'
@@ -96,26 +101,24 @@ class FewShotSeg(nn.Module):
         qry_fts_reshaped = self.self_attention(qry_fts_reshaped)
 
         # Reshape back to original size
-        supp_fts = supp_fts_reshaped.view(n_ways, self.n_shots, batch_size, -1, *fts_size)  # Wa x Sh x B x C x H' x W'
+        #supp_fts = supp_fts_reshaped.view(n_ways, self.n_shots, batch_size, -1, *fts_size)  # Wa x Sh x B x C x H' x W'
         qry_fts = qry_fts_reshaped.view(n_queries, batch_size_q, -1, *fts_size)  # N x B x C x H' x W'
-
         fore_mask = torch.stack([torch.stack(way, dim=0)
                                  for way in fore_mask], dim=0)  # Wa x Sh x B x H' x W'
 
         # ###### Generate prior ######
-        qry_fts1 = qry_fts.view(-1, qry_fts_reshaped.shape[2], *fts_size)  # (N * B) x C x H' x W'
-        supp_fts1 = supp_fts_reshaped.view(batch_size, -1, *fts_size)  # B x C x H' x W'
-        fore_mask = fore_mask[0][0]  # B x H' x W'
-        corr_query_mask = self.generate_prior(qry_fts1, supp_fts1, fore_mask,(256,256))
+        qry_fts1 = qry_fts.view(-1, qry_fts.shape[2], *fts_size)  # (N * B) x C x H' x W'
+        supp_fts1 = supp_fts.view(batch_size, -1, *fts_size)  # B x C x H' x W'
+        fore_mask1 = fore_mask[0][0]  # B x H' x W'
+        corr_query_mask = self.generate_prior(qry_fts1, supp_fts1, fore_mask1, (32, 32))
 
         # Reshape corr_query_mask from (N * B) x 1 x H' x W' to N x B x 1 x H' x W'
         corr_query_mask = corr_query_mask.view(n_queries, batch_size_q, 1, *fts_size)
 
-        # Concatenate prior and query features
-        #qry_fts = torch.cat([qry_fts_reshaped, corr_query_mask], dim=2)  # N x B x (C + 1) x H' x W'
-
+        # Fusion prior and query features
+        qry_fts = torch.cat([qry_fts, corr_query_mask], dim=2)  # N x B x (C + 1) x H' x W'
         qry_fts = self.conv_fusion(qry_fts.view(-1, qry_fts.shape[2], *fts_size)).view(n_queries, batch_size_q, -1,
-                                                                                  *fts_size)
+                                                                                       *fts_size)
 
         supp_fts_reshaped = supp_fts.view(-1, *supp_fts.shape[3:])
         qry_fts_reshaped = qry_fts.view(-1, *qry_fts.shape[2:])
@@ -124,8 +127,8 @@ class FewShotSeg(nn.Module):
         supp_fts_out, qry_fts_out = self.cross_attention(supp_fts_reshaped, qry_fts_reshaped)
 
         # Reshape back to original shape
-        supp_fts = supp_fts_out.view(*supp_fts.shape)
-        qry_fts = qry_fts_out.view(*qry_fts.shape)
+        supp_fts1 = supp_fts_out.view(*supp_fts.shape)
+        qry_fts1 = qry_fts_out.view(*qry_fts.shape)
 
         ###### Compute loss ######
         align_loss = torch.zeros(1).to(self.device)
@@ -138,8 +141,6 @@ class FewShotSeg(nn.Module):
                           for shot in range(self.n_shots)] for way in range(n_ways)]
 
             fg_prototypes = self.getPrototype(supp_fts_)
-
-            ###### Compute anom. scores ######
             anom_s = [self.negSim(qry_fts[epi], prototype) for prototype in fg_prototypes]
 
             ###### Get threshold #######
@@ -148,6 +149,25 @@ class FewShotSeg(nn.Module):
 
             ###### Get predictions #######
             pred = self.getPred(anom_s, self.thresh_pred)  # N x Wa x H' x W'
+
+            qry_fts1 = [qry_fts1]
+            fg_prototypes1 =[fg_prototypes]
+            qry_prediction = [torch.stack(
+                [self.getPrediction(qry_fts1[n][epi], fg_prototypes1[n][way], self.thresh_pred[way])
+                 for way in range(self.n_ways)], dim=1) for n in range(len(qry_fts1))]  # N x Wa x H' x W'
+
+            ###### Prototype Refinement  ######
+            fg_prototypes_ = []
+            if (not train) and n_iters > 0:  # iteratively update prototypes
+                for n in range(len(qry_fts1)):
+                    fg_prototypes_.append(
+                        self.updatePrototype(qry_fts1[n], fg_prototypes1[n], qry_prediction[n], n_iters, epi))
+
+                qry_prediction = [torch.stack(
+                    [self.getPrediction(qry_fts1[n][epi], fg_prototypes_[n][way], self.thresh_pred[way]) for way in
+                     range(self.n_ways)], dim=1) for n in range(len(qry_fts1))]  # N x Wa x H' x W'
+            pred_ups = [F.interpolate(qry_prediction[n], size=img_size, mode='bilinear', align_corners=True)
+                           for n in range(len(qry_fts1))]
 
             pred_ups = F.interpolate(pred, size=img_size, mode='bilinear', align_corners=True)
             pred_ups = torch.cat((1.0 - pred_ups, pred_ups), dim=1)
@@ -163,8 +183,42 @@ class FewShotSeg(nn.Module):
 
         output = torch.stack(outputs, dim=1)  # N x B x (1 + Wa) x H x W
         output = output.view(-1, *output.shape[2:])
+        return output, align_loss / batch_size, #(t_loss_scaler * self.t_loss)
 
-        return output, align_loss / batch_size
+    def updatePrototype(self, fts, prototype, pred, update_iters, epi):
+
+        prototype_0 = torch.stack(prototype, dim=0)
+        prototype_ = Parameter(torch.stack(prototype, dim=0))
+
+        optimizer = torch.optim.Adam([prototype_], lr=0.01)
+
+        while update_iters > 0:
+            with torch.enable_grad():
+                pred_mask = torch.sum(pred, dim=-3)
+                pred_mask = torch.stack((1.0 - pred_mask, pred_mask), dim=1).argmax(dim=1, keepdim=True)
+                pred_mask = pred_mask.repeat([*fts.shape[1:-2], 1, 1])
+                bg_fts = fts[epi] * (1 - pred_mask)
+                fg_fts = torch.zeros_like(fts[epi])
+                for way in range(self.n_ways):
+                    fg_fts += prototype_[way].unsqueeze(-1).unsqueeze(-1).repeat(*pred.shape) \
+                              * pred_mask[way][None, ...]
+                new_fts = bg_fts + fg_fts
+                fts_norm = torch.sigmoid((fts[epi] - fts[epi].min()) / (fts[epi].max() - fts[epi].min()))
+                new_fts_norm = torch.sigmoid((new_fts - new_fts.min()) / (new_fts.max() - new_fts.min()))
+                bce_loss = nn.BCELoss()
+                loss = bce_loss(fts_norm, new_fts_norm)
+
+            optimizer.zero_grad()
+            # loss.requires_grad_()
+            loss.backward()
+            optimizer.step()
+
+            pred = torch.stack([self.getPrediction(fts[epi], prototype_[way], self.thresh_pred[way])
+                                for way in range(self.n_ways)], dim=1)  # N x Wa x H' x W'
+
+            update_iters += -1
+
+        return prototype_
 
     def negSim(self, fts, prototype):
         """
@@ -260,6 +314,21 @@ class FewShotSeg(nn.Module):
 
         return torch.stack(pred, dim=1)  # N x Wa x H' x W'
 
+    def getPrediction(self, fts, prototype, thresh):
+        """
+        Calculate the distance between features and prototypes
+
+        Args:
+            fts: input features
+                expect shape: N x C x H x W
+            prototype: prototype of one semantic class
+                expect shape: 1 x C
+        """
+
+        sim = -F.cosine_similarity(fts, prototype[..., None, None], dim=1) * self.scaler
+        pred = 1.0 - torch.sigmoid(0.5 * (sim - thresh))
+
+        return pred
 
 class SelfAttention(nn.Module):
     def __init__(self, dim):
@@ -302,3 +371,4 @@ class CrossAttention(nn.Module):
         outy = torch.bmm(vx, attn.permute(0, 2, 1)).view(B, C, H, W)  # B, C, H, W
 
         return outx, outy
+
