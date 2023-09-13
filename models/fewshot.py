@@ -334,15 +334,22 @@ class SelfAttention(nn.Module):
         self.key = nn.Conv2d(dim, dim // 8, 1)
         self.value = nn.Conv2d(dim, dim, 1)
         self.softmax = nn.Softmax(dim=-2)
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, dim),
+            nn.ReLU(),
+            nn.Linear(dim, dim)
+        self.norm = nn.LayerNorm([dim, dim])
 
     def forward(self, x):
         B, C, H, W = x.shape
-        q = self.query(x).view(B, -1, H * W).permute(0, 2, 1)  # B, H*W, C'
+        scale = (C // 8) ** -0.5
+        q = self.query(x).view(B, -1, H * W).permute(0, 2, 1) * scale # B, H*W, C'
         k = self.key(x).view(B, -1, H * W)  # B, C', H*W
         v = self.value(x).view(B, -1, H * W)  # B, C, H*W
         attn = self.softmax(torch.bmm(q, k))  # B, H*W, H*W
         out = torch.bmm(v, attn.permute(0, 2, 1)).view(B, C, H, W)  # B, C, H, W
-        return out
+        out = self.mlp(out.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        return self.norm(out)
 
 
 class CrossAttention(nn.Module):
@@ -352,20 +359,32 @@ class CrossAttention(nn.Module):
         self.key = nn.Conv2d(dim, dim // 8, 1)
         self.value = nn.Conv2d(dim, dim, 1)
         self.softmax = nn.Softmax(dim=-1)
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, dim),
+            nn.ReLU(),
+            nn.Linear(dim, dim)
+        )
+        self.norm = nn.LayerNorm([dim, dim])
 
     def forward(self, x, y):
         B, C, H, W = x.shape
-        qx = self.query(x).view(B, -1, H * W).permute(0, 2, 1)  # B, H*W, C'
+        scale = (C // 8) ** -0.5
+
+        qx = self.query(x).view(B, -1, H * W).permute(0, 2, 1) * scale  # B, H*W, C'
         ky = self.key(y).view(B, -1, H * W)  # B, C', H*W
         vy = self.value(y).view(B, -1, H * W)  # B, C, H*W
         attn = self.softmax(torch.bmm(qx, ky))  # B, H*W, H*W
         outx = torch.bmm(vy, attn.permute(0, 2, 1)).view(B, C, H, W)  # B, C, H, W
+        outx = self.mlp(outx.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)  # Apply MLP and permute back
+        outx = self.norm(outx)  # Apply normalization
 
-        qy = self.query(y).view(B, -1, H * W).permute(0, 2, 1)  # B, H*W, C'
+        qy = self.query(y).view(B, -1, H * W).permute(0, 2, 1) * scale  # B, H*W, C'
         kx = self.key(x).view(B, -1, H * W)  # B, C', H*W
         vx = self.value(x).view(B, -1, H * W)  # B, C, H*W
         attn = self.softmax(torch.bmm(qy, kx))  # B, H*W, H*W
         outy = torch.bmm(vx, attn.permute(0, 2, 1)).view(B, C, H, W)  # B, C, H, W
+        outy = self.mlp(outy.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)  # Apply MLP and permute back
+        outy = self.norm(outy)  # Apply normalization
 
         return outx, outy
 
