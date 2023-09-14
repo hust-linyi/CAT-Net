@@ -337,8 +337,8 @@ class SelfAttention(nn.Module):
         self.mlp = nn.Sequential(
             nn.Linear(dim, dim),
             nn.ReLU(),
-            nn.Linear(dim, dim)
-        self.norm = nn.LayerNorm([dim, dim])
+            nn.Linear(dim, dim))
+        self.norm = nn.LayerNorm([256, 32, 32]])
 
     def forward(self, x):
         B, C, H, W = x.shape
@@ -364,7 +364,7 @@ class CrossAttention(nn.Module):
             nn.ReLU(),
             nn.Linear(dim, dim)
         )
-        self.norm = nn.LayerNorm([dim, dim])
+        self.norm = nn.LayerNorm([[256, 32, 32]])
 
     def forward(self, x, y):
         B, C, H, W = x.shape
