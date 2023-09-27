@@ -22,7 +22,7 @@ def set_seed(seed):
 CLASS_LABELS = {
     'CHAOST2': {
         'pa_all': set(range(1, 5)),
-        0: set([1, 4]),  # upper_abdomen, leaving kidneies as testing classes
+        0: set([1, 4]),  # upper_abdomen, leaving kidneys as testing classes
         1: set([2, 3]),  # lower_abdomen
     },
 }
