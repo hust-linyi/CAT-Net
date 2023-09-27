@@ -38,7 +38,7 @@ def main(_run, _config, _log):
         _log.handlers.append(file_handler)
         _log.info(f'Run "{_config["exp_str"]}" with ID "{_run.observers[0].dir[-1]}"')
 
-    # Deterministic setting for reproduciablity.
+    # Deterministic setting for reproducibility.
     if _config['seed'] is not None:
         random.seed(_config['seed'])
         torch.manual_seed(_config['seed'])
