@@ -93,7 +93,7 @@ def cfg():
 
 @ex.config_hook
 def add_observer(config, command_name, logger):
-    """A hook fucntion to add observer"""
+    """A hook function to add observer"""
     exp_name = f'{ex.path}_{config["exp_str"]}'
     observer = FileStorageObserver.create(os.path.join(config['path']['log_dir'], exp_name))
     ex.observers.append(observer)
